@@ -1,15 +1,3 @@
-// Package frostauth is the Go port of the FrostAuth licensing SDK.
-//
-// It keeps the same wire behavior as sdk/frostauth.js:
-//   - every server response is Ed25519-verified over
-//     "timestamp\nnonce\nmethod\npath\nstatus\nbody" (±60s skew, pinned key IDs),
-//   - init() pins the server's public key against the key baked into this build,
-//   - the server issues a signed offline assertion, verified locally when the
-//     network is gone,
-//   - a DNS-hijack tripwire refuses hosts that resolve to loopback/private
-//     space (licence-emulator pattern) before any licence material is sent.
-//
-// Standard library only.
 package frostauth
 
 import (
@@ -46,11 +34,8 @@ const (
 	assertPrefix   = "frostauth:assertion:v1"
 )
 
-// PublicKeys are the signing keys baked into this build (TOFU). The server
-// must serve one of these by key ID during init().
 var PublicKeys = map[string]string{ "k2": "MCowBQYDK2VwAyEA7xdiHZqo4DmS4O1C8FavYq9Yqk5QbBkJiicb1MTTFzo" }
 
-// Codes carried by *Error for switch-style handling.
 const (
 	CodeConfig          = "CONFIG"
 	CodeNetwork         = "NETWORK"
@@ -62,36 +47,29 @@ const (
 	CodeRateLimited     = "RATE_LIMITED"
 )
 
-// Error is the error type returned by every SDK call.
 type Error struct {
 	Code        string
 	Status      int
 	Retryable   bool
 	RequestID   string
-	RetryAfterS int // set on RATE_LIMITED
+	RetryAfterS int
 	msg         string
 }
 
 func (e *Error) Error() string { return e.msg }
 
-// NeedsActivation reports a 404 "unknown app/key" — the licence never existed here.
 func (e *Error) NeedsActivation() bool { return e.Status == 404 && !e.Retryable }
 
-// Terminal reports a definitive 4xx (bad licence, banned, …) — stop retrying.
 func (e *Error) Terminal() bool { return !e.Retryable && !e.NeedsActivation() && e.Status >= 400 && e.Status < 500 }
 
 func sdkErr(code string, status int, msg string) *Error {
 	return &Error{Code: code, Status: status, msg: msg}
 }
 
-// ── public key plumbing ──────────────────────────────────────────────────────
 
-// spkiToEd25519 extracts the raw 32-byte Ed25519 public key from a
-// base64url SPKI DER blob (fixed 12-byte header + key).
 func spkiToEd25519(b64 string) (ed25519.PublicKey, error) {
 	der, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil {
-		// tolerate padded input too
 		if der, err = base64.URLEncoding.DecodeString(strings.TrimSpace(b64)); err != nil {
 			return nil, fmt.Errorf("not a usable Ed25519 public key: %w", err)
 		}
@@ -160,7 +138,6 @@ func newKeyRing(value any) (keyRing, error) {
 	return ring, nil
 }
 
-// ── offline assertions ───────────────────────────────────────────────────────
 
 func claimString(c map[string]any) []byte {
 	g := func(k string) string {
@@ -192,8 +169,6 @@ func parseMS(v any) (int64, bool) {
 	return 0, false
 }
 
-// VerifyAssertion verifies a server-issued offline assertion against pinned
-// keys. Fails closed on unreadable/inverted windows.
 func VerifyAssertion(assertion string, pinned map[string]string, opts ...map[string]any) (map[string]any, bool, string) {
 	ring, err := newKeyRing(pinned)
 	if err != nil || ring.size() == 0 {
@@ -262,7 +237,6 @@ func VerifyAssertion(assertion string, pinned map[string]string, opts ...map[str
 	return claims, true, ""
 }
 
-// ── machine identity ─────────────────────────────────────────────────────────
 
 func runCmd(timeout time.Duration, name string, args ...string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -334,8 +308,6 @@ func rawMachineID() string {
 	return machineCache
 }
 
-// HardwareID is the scoped SHA-256 of the machine id. The raw id never leaves
-// the device.
 func HardwareID(scope string) string {
 	if scope == "" {
 		scope = "frostauth"
@@ -380,7 +352,6 @@ func looksVM(s string) bool {
 	return false
 }
 
-// HardwareProfile is advisory anti-clone data. Only hashes leave the device.
 func HardwareProfile() ([]map[string]string, bool) {
 	var cpuModel string
 	nCPU := runtime.NumCPU()
@@ -462,7 +433,6 @@ func sortStrings(s []string) {
 	}
 }
 
-// ── DNS-hijack tripwire ──────────────────────────────────────────────────────
 
 func isPrivateIP(ipStr string) bool {
 	ip := net.ParseIP(ipStr)
@@ -476,14 +446,12 @@ func isPrivateIP(ipStr string) bool {
 			(v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31) ||
 			(v4[0] == 0)
 	}
-	// IPv6: loopback, unspecified, ULA fc00::/7, link-local fe80::/10
 	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
 		return true
 	}
 	return ip[0] == 0xfc || ip[0] == 0xfd
 }
 
-// ── envelope parsing ─────────────────────────────────────────────────────────
 
 type envelope struct {
 	Error    any `json:"error"`
@@ -492,8 +460,6 @@ type envelope struct {
 		Message   string          `json:"message"`
 		Data      json.RawMessage `json:"data"`
 	} `json:"response"`
-	// Shared fields: `error` is a bool/absent in the envelope shape and the
-	// error code string in the catalog shape; `message` is top-level in both.
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 	KeyID     string `json:"key_id"`
@@ -503,25 +469,23 @@ type envelope struct {
 	Errors    map[string]string `json:"errors"`
 }
 
-// ── client ───────────────────────────────────────────────────────────────────
 
 type Options struct {
 	Owner   string
 	Product string
 	Version string
 
-	BaseURL            string // default DefaultBaseURL
-	TimeoutMS          int    // per request, default 10000
-	Retries            int    // default 2
-	OfflineGraceSeconds int   // default 900
-	PublicKey          map[string]string // optional TOFU pins before init
-	AllowInsecure      bool // allow http to non-loopback (not recommended)
-	AllowPrivateDNS    bool // skip the DNS-hijack tripwire
-	HardwareIDOverride string // custom hwid function output
-	CollectHardware    bool  // default true
+	BaseURL            string
+	TimeoutMS          int
+	Retries            int
+	OfflineGraceSeconds int
+	PublicKey          map[string]string
+	AllowInsecure      bool
+	AllowPrivateDNS    bool
+	HardwareIDOverride string
+	CollectHardware    bool
 }
 
-// Session carries token + server-suggested heartbeat cadence.
 type sessionInfo struct {
 	Token            string `json:"token"`
 	HeartbeatSeconds int    `json:"heartbeatSeconds"`
@@ -532,7 +496,6 @@ type offlineInfo struct {
 	NotAfter  string `json:"notAfter"`
 }
 
-// Snapshot is a point-in-time view of the client state.
 type Snapshot struct {
 	App           map[string]any `json:"app"`
 	License       map[string]any `json:"license"`
@@ -544,7 +507,6 @@ type Snapshot struct {
 	Valid         bool           `json:"valid"`
 }
 
-// FrostAuth is the client. Create with New, then Init → Activate/Login.
 type FrostAuth struct {
 	Owner, Product, Version string
 	BaseURL                 string
@@ -575,7 +537,6 @@ type FrostAuth struct {
 	hbStop     chan struct{}
 	hbRunning  bool
 
-	// Event hooks (optional). Called from the heartbeat goroutine.
 	OnActivated       func(Snapshot)
 	OnValidated       func(Snapshot)
 	OnLoggedIn        func(Snapshot)
@@ -585,7 +546,6 @@ type FrostAuth struct {
 	OnNeedsActivation func(err *Error)
 }
 
-// New validates options and returns a client. Call Init before using it.
 func New(o Options) (*FrostAuth, error) {
 	for _, p := range []struct {
 		name, v string
@@ -637,7 +597,6 @@ func (c *FrostAuth) Valid() bool {
 	return c.activated && !c.closed
 }
 
-// Init fetches the public catalog and pins the server's signing key.
 func (c *FrostAuth) Init() (map[string]any, error) {
 	if err := c.assertRealHost(); err != nil {
 		return nil, err
@@ -677,7 +636,6 @@ func (c *FrostAuth) Init() (map[string]any, error) {
 	return c.App(), nil
 }
 
-// App returns the catalog info adopted by Init.
 func (c *FrostAuth) App() map[string]any { c.mu.Lock(); defer c.mu.Unlock(); return c.app }
 
 func (c *FrostAuth) assertInit() error {
@@ -689,7 +647,6 @@ func (c *FrostAuth) assertInit() error {
 	return nil
 }
 
-// resolveMachineID caches the machine id (or the integrator's override).
 func (c *FrostAuth) resolveMachineID() (string, error) {
 	c.mu.Lock()
 	override, existing := c.hwOverride, c.machineID
@@ -722,13 +679,11 @@ func (c *FrostAuth) hardwareExtra() (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	comps, virtual := HardwareProfile()
-	// values must survive JSON as strings
 	list := make([]map[string]string, 0, len(comps))
 	list = append(list, comps...)
 	return map[string]any{"components": list, "virtual": virtual}, nil
 }
 
-// Activate binds a licence key to this machine and opens a session.
 func (c *FrostAuth) Activate(key string, extra map[string]string) (Snapshot, error) {
 	if err := c.assertInit(); err != nil {
 		return Snapshot{}, err
@@ -771,7 +726,6 @@ func (c *FrostAuth) Activate(key string, extra map[string]string) (Snapshot, err
 	return snap, nil
 }
 
-// Register creates an app user from a licence key, then opens a session.
 func (c *FrostAuth) Register(key, username, password string, extra map[string]string) (Snapshot, error) {
 	if err := c.assertInit(); err != nil {
 		return Snapshot{}, err
@@ -815,7 +769,6 @@ func (c *FrostAuth) Register(key, username, password string, extra map[string]st
 	return snap, nil
 }
 
-// Login signs in an app user and opens a session.
 func (c *FrostAuth) Login(username, password string, extra map[string]string) (Snapshot, error) {
 	if err := c.assertInit(); err != nil {
 		return Snapshot{}, err
@@ -862,7 +815,6 @@ func (c *FrostAuth) Login(username, password string, extra map[string]string) (S
 	return snap, nil
 }
 
-// Upgrade attaches a licence key to an existing app user.
 func (c *FrostAuth) Upgrade(username, password, key string) (map[string]any, error) {
 	if err := c.assertInit(); err != nil {
 		return nil, err
@@ -883,7 +835,6 @@ func (c *FrostAuth) authed(method, path string, body map[string]any) (map[string
 	return c.requestEnvelope(method, path, body, sess.Token)
 }
 
-// Logout invalidates the session server-side and closes the client.
 func (c *FrostAuth) Logout() (map[string]any, error) {
 	c.mu.Lock()
 	hasToken := c.sess != nil && c.sess.Token != ""
@@ -896,7 +847,6 @@ func (c *FrostAuth) Logout() (map[string]any, error) {
 	return c.authed("POST", "/api/v1/sdk/logout", nil)
 }
 
-// Session re-fetches and adopts current session state.
 func (c *FrostAuth) Session() (Snapshot, error) {
 	data, err := c.authed("GET", "/api/v1/sdk/session", nil)
 	if err != nil {
@@ -908,7 +858,6 @@ func (c *FrostAuth) Session() (Snapshot, error) {
 	return c.snapshotLocked(), nil
 }
 
-// Variable reads an app-level variable (tier/minVersion gated server-side).
 func (c *FrostAuth) Variable(key string) (string, error) {
 	data, err := c.authed("GET", "/api/v1/sdk/vars/app/"+url.PathEscape(key), nil)
 	if err != nil {
@@ -917,7 +866,6 @@ func (c *FrostAuth) Variable(key string) (string, error) {
 	return stringField(data, "value"), nil
 }
 
-// ListVars reads all user variables for this session's user.
 func (c *FrostAuth) ListVars() ([]any, error) {
 	data, err := c.authed("GET", "/api/v1/sdk/vars/user", nil)
 	if err != nil {
@@ -929,7 +877,6 @@ func (c *FrostAuth) ListVars() ([]any, error) {
 	return nil, nil
 }
 
-// GetVar reads one user variable.
 func (c *FrostAuth) GetVar(key string) (string, error) {
 	data, err := c.authed("GET", "/api/v1/sdk/vars/user/"+url.PathEscape(key), nil)
 	if err != nil {
@@ -938,12 +885,10 @@ func (c *FrostAuth) GetVar(key string) (string, error) {
 	return stringField(data, "value"), nil
 }
 
-// SetVar writes one user variable.
 func (c *FrostAuth) SetVar(key, value string) (map[string]any, error) {
 	return c.authed("PUT", "/api/v1/sdk/vars/user/"+url.PathEscape(key), map[string]any{"value": value})
 }
 
-// ChangeUsername renames the signed-in app user (password re-check server-side).
 func (c *FrostAuth) ChangeUsername(username, password string) (map[string]any, error) {
 	data, err := c.authed("PATCH", "/api/v1/sdk/username", map[string]any{"username": username, "password": password})
 	if err != nil {
@@ -960,12 +905,10 @@ func (c *FrostAuth) ChangeUsername(username, password string) (map[string]any, e
 	return data, nil
 }
 
-// Log records a client-side event if the operator enabled appLogs.
 func (c *FrostAuth) Log(message string) (map[string]any, error) {
 	return c.authed("POST", "/api/v1/sdk/log", map[string]any{"message": truncate(message, 256)})
 }
 
-// Ban self-reports this device (operator-defined policy; server decides).
 func (c *FrostAuth) Ban(reason string) (map[string]any, error) {
 	c.StopHeartbeat()
 	defer func() {
@@ -978,17 +921,14 @@ func (c *FrostAuth) Ban(reason string) (map[string]any, error) {
 	return c.authed("POST", "/api/v1/sdk/ban", map[string]any{"reason": truncate(reason, 200)})
 }
 
-// FetchOnline returns the live device count/usernames for the product.
 func (c *FrostAuth) FetchOnline() (map[string]any, error) {
 	return c.authed("GET", "/api/v1/sdk/online", nil)
 }
 
-// CheckBlacklist reports whether this device/IP/key/username is blacklisted.
 func (c *FrostAuth) CheckBlacklist() (map[string]any, error) {
 	return c.authed("GET", "/api/v1/sdk/checkblacklist", nil)
 }
 
-// Webhook fires an operator-configured client webhook by handle.
 func (c *FrostAuth) Webhook(id string, params, body, conttype string) (map[string]any, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, sdkErr(CodeConfig, 0, "webhook id is required")
@@ -1006,18 +946,14 @@ func (c *FrostAuth) Webhook(id string, params, body, conttype string) (map[strin
 	return c.authed("POST", "/api/v1/sdk/webhook/"+url.PathEscape(id), payload)
 }
 
-// AppData returns product stats for the current session.
 func (c *FrostAuth) AppData() (map[string]any, error) {
 	return c.authed("GET", "/api/v1/sdk/app", nil)
 }
 
-// File downloads a product file by handle. Currently disabled server-side
-// (route unmounted) — mirrors the JS reference SDK, which throws.
 func (c *FrostAuth) File(id string) ([]byte, error) {
 	return nil, sdkErr(CodeServerError, 0, "File downloads are disabled on this server")
 }
 
-// Validate re-checks the licence/session with the server.
 func (c *FrostAuth) Validate() (Snapshot, error) {
 	if err := c.assertInit(); err != nil {
 		return Snapshot{}, err
@@ -1072,11 +1008,8 @@ func (c *FrostAuth) Validate() (Snapshot, error) {
 	return Snapshot{}, err
 }
 
-// hasKeyLocked: caller must hold mu.
 func (c *FrostAuth) hasKeyLocked() bool { return c.license != nil && c.machineID != "" }
 
-// StoreKey lets callers re-validate a key-only session (server remembers the
-// device from activation). Optional — usually Activate already ran.
 func (c *FrostAuth) StoreKey(key string) {
 	c.mu.Lock()
 	c.machineKey = key
@@ -1104,9 +1037,6 @@ func (c *FrostAuth) sendValidate() (map[string]any, error) {
 	return c.requestEnvelope("POST", "/api/v1/validate", payload)
 }
 
-// StartHeartbeat validates periodically until StopHeartbeat/Close. It emits
-// through the On* hooks and honors the server-issued offline assertion while
-// the network is down, up to OfflineGraceSeconds.
 func (c *FrostAuth) StartHeartbeat(intervalSeconds int) error {
 	c.mu.Lock()
 	hasCred := (c.sess != nil && c.sess.Token != "") || c.machineKey != "" || c.hasKeyLocked()
@@ -1217,7 +1147,6 @@ func (c *FrostAuth) StartHeartbeat(intervalSeconds int) error {
 
 func derFromEd(k ed25519.PublicKey) []byte { return []byte(k) }
 
-// StopHeartbeat stops the periodic validator.
 func (c *FrostAuth) StopHeartbeat() {
 	c.mu.Lock()
 	if c.hbStop != nil {
@@ -1231,7 +1160,6 @@ func (c *FrostAuth) StopHeartbeat() {
 	c.mu.Unlock()
 }
 
-// Close tears down the client and drops the offline assertion.
 func (c *FrostAuth) Close() {
 	c.StopHeartbeat()
 	c.mu.Lock()
@@ -1247,7 +1175,6 @@ func (c *FrostAuth) Close() {
 	c.mu.Unlock()
 }
 
-// CheckOffline verifies the last server-issued assertion locally.
 func (c *FrostAuth) CheckOffline() (bool, string) {
 	c.mu.Lock()
 	assertion := c.assertion
@@ -1267,14 +1194,12 @@ func (c *FrostAuth) CheckOffline() (bool, string) {
 	return ok, reason
 }
 
-// Snapshot returns the current state.
 func (c *FrostAuth) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.snapshotLocked()
 }
 
-// caller holds mu
 func (c *FrostAuth) snapshotLocked() Snapshot {
 	return Snapshot{
 		App: c.app, License: c.license, Product: c.product, Device: c.device,
@@ -1283,7 +1208,6 @@ func (c *FrostAuth) snapshotLocked() Snapshot {
 	}
 }
 
-// adopt merges a success envelope's data into client state. caller need not hold mu.
 func (c *FrostAuth) adopt(data map[string]any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1305,7 +1229,6 @@ func (c *FrostAuth) adopt(data map[string]any) {
 			}
 			dl, _ := v["downloadUrl"].(string)
 			_ = dl
-			// fire outside the lock
 			go func() {
 				if c.OnUpdateAvailable != nil {
 					c.OnUpdateAvailable(current, latest)
@@ -1335,7 +1258,6 @@ func (c *FrostAuth) adopt(data map[string]any) {
 	}
 }
 
-// ── transport ────────────────────────────────────────────────────────────────
 
 func signingInput(ts, nonce, method, path string, status int, body string) []byte {
 	return []byte(strings.Join([]string{ts, nonce, strings.ToUpper(method), path, strconv.Itoa(status), body}, "\n"))
@@ -1346,7 +1268,7 @@ func (c *FrostAuth) verifyHeaders(h http.Header, raw string, nonce, method, path
 	ring := c.keys
 	c.mu.Unlock()
 	if ring.size() == 0 {
-		return nil // no pin configured; init() does the TOFU check instead
+		return nil
 	}
 	sig := h.Get("x-frost-signature")
 	ts := h.Get("x-frost-timestamp")
@@ -1381,7 +1303,6 @@ func (c *FrostAuth) verifyHeaders(h http.Header, raw string, nonce, method, path
 	return nil
 }
 
-// request performs one HTTP round trip (no retries). Returns raw body.
 func (c *FrostAuth) request(method, path string, body map[string]any, token string) ([]byte, int, http.Header, error) {
 	var buf bytes.Buffer
 	if body != nil {
@@ -1436,11 +1357,10 @@ func reader(b map[string]any) *bytes.Reader {
 }
 
 func readAll(r io.Reader) ([]byte, error) {
-	const limit = 8 << 20 // 8 MiB cap — answers are JSON envelopes, never files
+	const limit = 8 << 20
 	return io.ReadAll(io.LimitReader(r, limit))
 }
 
-// requestEnvelope runs the retry/429/envelope logic and unwraps response.data.
 func (c *FrostAuth) requestEnvelope(method, path string, body map[string]any, token ...string) (map[string]any, error) {
 	tok := ""
 	if len(token) > 0 {
@@ -1459,14 +1379,12 @@ func (c *FrostAuth) requestEnvelope(method, path string, body map[string]any, to
 		if err != nil {
 			var sdkE *Error
 			if errors.As(err, &sdkE) && sdkE.Code == CodeSignature {
-				return nil, err // never retry a failed signature
+				return nil, err
 			}
 			lastErr = err
 			continue
 		}
 
-		// 429s are unsigned by design; everything else must already have
-		// passed verification inside request().
 		if status == 429 && hdr.Get("x-frost-signature") == "" {
 			wait := 2
 			if ra, e := strconv.Atoi(hdr.Get("retry-after")); e == nil && ra > 0 && ra <= maxRetryAfterS {
@@ -1571,5 +1489,5 @@ func min(a, b int) int {
 	return b
 }
 
-var _ = big.NewInt // keep imports stable if unused branches are pruned
+var _ = big.NewInt
 var _ = binary.LittleEndian
