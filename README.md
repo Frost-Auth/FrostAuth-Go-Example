@@ -1,34 +1,19 @@
 # FrostAuth-Go-Example 🌟
 
-FrostAuth Go example SDK for https://www.frostauth.cc license key API auth.
+Go example for the [FrostAuth license key API](https://www.frostauth.cc/).
 
-This example vendors the SDK source directly — `frostauth/frostauth.go`.
-Import it, mirror `example/main.go`, and you're integrated. Zero third-party
-modules, stdlib only.
+`frostauth/frostauth.go` uses the Go standard library. Start with `example/main.go` to see the console flow.
 
 ## Bugs
 
-If you're running this example with no significant changes and something's broken,
-open an issue with your FrostAuth version, Go version, and the exact error text.
-
-We do **NOT** provide support for wiring FrostAuth into your project. If the
-build steps below don't make sense yet, learn some Go first (Go tour/YouTube),
-then come back.
+If you can reproduce the issue with the example, open an issue with the SDK version, `go version`, and the exact error. Remove license keys and tokens before posting.
 
 ## Security practices
 
-* Ship releases through an obfuscator/protector (garble, VMProtect for cgo
-builds) and put license checks behind their markers, not just `main()`.
-* Run frequent integrity checks so patched memory kills the session instead of
-granting access.
-* Never write a downloaded file to disk if you don't want the user to have it.
-Execute in memory and wipe the buffer the moment you're done.
-* Treat every client answer as advisory. The server re-checks the license on
-each call — don't add a local `isValid` boolean that bypasses it.
-
-FrostAuth signs every response and pins the server key, but no API survives a
-client that trusts itself. Obfuscation + integrity checks stop tampering; the
-API stops key sharing.
+- Keep credentials, license keys, and session tokens out of logs.
+- Handle errors by code. The API can change the message text.
+- Keep authorization for server resources on the server.
+- Run your usual signing and integrity checks before shipping.
 
 ## Copyright License
 
@@ -38,20 +23,17 @@ This SDK is distributed under Elastic License 2.0. See [LICENSE](LICENSE).
 
 ## What is FrostAuth?
 
-FrostAuth is a cloud licensing platform that protects your software from piracy
-and unauthorized access. Hardware-locked licenses, secure auth, real-time
-analytics, and a dashboard your customers never see. Client SDKs for Go (this
-repo), C++, C#, Python, Rust, Java, and JavaScript. Come ask questions on
-Discord: https://www.frostauth.cc/discord
+FrostAuth is a cloud licensing API with device-bound keys, app accounts, and a dashboard for managing licenses and tracking activations. SDKs are available for C++, C#, Go, Java, JavaScript, Python, and Rust. For product questions, join the [FrostAuth Discord](https://www.frostauth.cc/discord).
 
 ## Requirements
 
-* Go 1.22+ (`go.mod` included, zero third-party modules)
+Go 1.24 or newer, as specified in `go.mod`.
 
 ## Build
 
+Run these commands from the SDK directory after setting your product details in the example.
+
 ```bash
-cd FrostAuth-Go-Example
 go build ./...          # compiles library + example
 go vet ./...            # static checks, must be clean
 go run ./example        # run the console example
@@ -60,22 +42,22 @@ go build -o frostauth-go.exe ./example   # standalone binary
 
 ## `FrostAuth` instance definition
 
-Open your FrostAuth dashboard, pick your product, and copy the three values
-into [`example/main.go`](example/main.go):
+Copy the owner ID and product ID from the FrostAuth dashboard into `example/main.go`. Set the version you plan to ship.
 
 ```go
 app, err := frostauth.New(frostauth.Options{
-    Owner:   "YOUR-OWNER-ID",     // dashboard → product → owner id
-    Product: "YOUR-PRODUCT-ID",   // dashboard → product → product id
-    Version: "1.0.0",             // must match the version you ship
+    Owner:   "0809y7MP",                                  // dashboard → owner id
+    Product: "33abf48a-8e33-4df5-a4bd-d79195704d52",      // dashboard → product → product id
+    Version: "1.0.0",                                     // must match the version you ship
 })
+if err != nil {
+    fail(err)
+}
 ```
 
 ## Initialize application
 
-You must call this before anything else. It fetches the public catalog and
-pins the server's signing key (TOFU) — every later response is Ed25519-checked
-against it, so a MITM serving a fake key aborts here instead of later.
+Call `Init()` first. It fetches the public catalog, checks its signing key against the bundled pin, and uses that key to verify signed API responses.
 
 ```go
 if _, err := app.Init(); err != nil {
@@ -85,38 +67,41 @@ if _, err := app.Init(); err != nil {
 
 ## Display application information
 
+Call this after activation or sign-in has returned a session token.
+
 ```go
-appData, _ := app.AppData()
-if p, ok := appData["product"].(map[string]any); ok {
-    fmt.Println("App Version:", p["version"])
-    fmt.Println("Customer panel: enabled")
+appData, err := app.AppData()
+if err != nil {
+    fail(err)
+}
+if product, ok := appData["product"].(map[string]any); ok {
+    fmt.Println("App version:", product["version"])
 }
 ```
 
 ## Check session validation
 
-Re-checks the license/session with the server. Falls back from a stale session
-token to the stored license key once.
+Use `Validate()` after activation or sign-in. If the API rejects a stale session token, the SDK retries once with the stored license key when it has one.
 
 ```go
 if _, err := app.Validate(); err != nil {
-    fail(err) // session dead — exit, don't continue into paid code
+    fail(err)
 }
 ```
 
 ## Check blacklist status
 
-Whether this device/IP/key is blacklisted. Optional: the server already
-refuses blacklisted callers on login/register, so this is just an early exit
-for clients that want to close before showing UI.
+Call this with an active session. The API also applies blacklist rules during activation and sign-in.
 
 ```go
 if _, err := app.CheckBlacklist(); err != nil {
-    fail(err) // blocked — exit
+    fail(err)
 }
 ```
 
 ## Login with username/password
+
+Pass the account credentials and supply a two-factor code when the account requires one.
 
 ```go
 snap, err := app.Login(username, password, map[string]string{})
@@ -136,9 +121,7 @@ if err != nil {
 
 ## Upgrade user with key
 
-Attaches a license key to an existing app user (adds time). Unlike login and
-register this opens **no session** — sign the user in after a successful
-upgrade.
+Apply the license key to the existing account, then sign in to open a session.
 
 ```go
 if _, err := app.Upgrade(username, password, key); err != nil {
@@ -150,8 +133,7 @@ snap, err := app.Login(username, password, map[string]string{})
 
 ## Login with just license key
 
-For key-only products. Binds the key to this machine and opens a session —
-no username needed.
+For key-only products, activate with the license key. The API applies the product's device rules and issues a session token where supported.
 
 ```go
 snap, err := app.Activate(key, map[string]string{})
@@ -160,15 +142,14 @@ if err != nil {
 }
 ```
 
-Extra build evidence: pass `map[string]string{"hash": selfHash}` (with an
-optional `"label"`) when the product has hash checks on.
+For products that check builds, pass `map[string]string{"hash": selfHash}` and add a `label` entry if you want to name the device.
 
 ## User Data
 
-Everything about the current session lives in the snapshot:
+`Snapshot()` reads the client state. The account and device fields depend on how the user activated or signed in.
 
 ```go
-snap, _ := app.Session()
+snap := app.Snapshot()
 fmt.Println("Username:", snap.User)
 fmt.Println("IP:", snap.Account["lastIp"])
 fmt.Println("Device Id:", snap.Device["id"])
@@ -179,13 +160,12 @@ for i, s := range snap.Subs {
 
 ## Check subscription of user
 
-Gate features by tier. Compare against the tier name you configured on the
-dashboard — exact match, case-insensitive on the server side.
+Use the tier name you set in the dashboard. This example checks for `pro`.
 
 ```go
 hasPro := false
 for _, s := range snap.Subs {
-    if tier, _ := strings.ToLower(s["tier"].(string)); tier == "pro" {
+    if tier, ok := s["tier"].(string); ok && strings.EqualFold(tier, "pro") {
         hasPro = true
     }
 }
@@ -197,32 +177,39 @@ if !hasPro {
 
 ## Application variables
 
-Server-side strings, global for all users (feature flags, MOTD, config).
-Read-only from the client; edit them on the dashboard. Tier- and
-version-gated server-side.
+Edit shared variables in the dashboard. The API applies the variable's tier and version rules when the SDK reads it.
 
 ```go
 motd, err := app.Variable("maintenance_message")
+if err != nil {
+    fail(err)
+}
 fmt.Println("MOTD:", motd)
 ```
 
 ## User Variables
 
-Per-user key/value pairs. Read and write them unless the operator marked one
-read-only (balances, ranks — server-writable only).
+Use these calls for account-specific values. The API blocks client writes to variables marked read-only.
 
 ```go
-vars, _ := app.ListVars()              // every variable on this user
-theme, _ := app.GetVar("theme")        // one variable's value
-app.SetVar("theme", "dark")            // write it back
+vars, err := app.ListVars()
+if err != nil {
+    fail(err)
+}
+fmt.Println(vars)
+theme, err := app.GetVar("theme")
+if err != nil {
+    fail(err)
+}
 fmt.Println("theme:", theme)
+if _, err := app.SetVar("theme", "dark"); err != nil {
+    fail(err)
+}
 ```
 
 ## Application Logs
 
-Ship an event to the operator log. Good for anti-debug alerts and crash
-breadcrumbs. If the operator set a Discord webhook, it lands there instead of
-the dashboard (dashboard logs rotate after 30 days).
+Call `Log()` to send an event to the operator. The product's logging settings determine where it appears.
 
 ```go
 app.Log("client started, integrity check passed")
@@ -230,8 +217,7 @@ app.Log("client started, integrity check passed")
 
 ## Ban the user
 
-Blacklists the HWID + IP. Call it when your integrity checks catch tampering.
-Only works after login. Ends the local session either way.
+`Ban()` requires an active session. It blacklists the device and IP address and ends the SDK's local session.
 
 ```go
 app.Ban("debugger detected") // reason shows on next login + dashboard
@@ -239,53 +225,60 @@ app.Ban("debugger detected") // reason shows on next login + dashboard
 
 ## Server-sided webhooks
 
-Fire an operator-configured webhook by id. The destination URL lives on the
-server — the client only supplies params/body, so secrets never ship in your
-binary. Tier-gated like files/variables.
+Pass the ID of a webhook configured by the product operator. The destination stays on the server.
 
 ```go
 res, err := app.Webhook("discord", "", `{"content":"Hello from FrostAuth"}`, "")
+if err != nil {
+    fail(err)
+}
 fmt.Println("upstream:", res["status"], "ok:", res["ok"])
 ```
 
 ## Download file
 
-> Currently disabled server-side (route unmounted). `File()` returns a
-> `CodeServerError` until file storage ships. The snippet below is the
-> integration pattern for when it lands.
-
-```go
-bytes, err := app.File("loader")
-if err != nil {
-    fail(err)
-}
-os.WriteFile("loader.bin", bytes, 0600)
-```
+> File downloads are disabled in this SDK. Calls to `File()` return an error.
 
 ## Changing username
 
-Lets a signed-in user rename themselves (password re-checked server-side).
+The API re-checks the signed-in user's password before renaming the account.
 
 ```go
 res, err := app.ChangeUsername(newName, password)
+if err != nil {
+    fail(err)
+}
 fmt.Println("Renamed to", res["username"])
 ```
 
 ## Heartbeat & offline
 
-`Validate()` on a timer keeps the session fresh. The SDK caches a signed
-offline assertion — when the network drops, `CheckOffline()` verifies it
-locally so the app keeps working inside the grace window.
+Start the heartbeat after activation or sign-in. `CheckOffline()` verifies the cached signed assertion, including its expiry.
+
+If the assertion expires or fails verification during an outage, the next failed heartbeat clears the active state. An invalid API response signature also stops the heartbeat and clears the active state.
+
+Set `Options.OfflineGraceSeconds` to change the 15-minute fallback for sessions that received no assertion.
 
 ```go
 app.OnOffline = func(err *frostauth.Error, secondsOffline int, verified bool) {
     fmt.Println("offline:", secondsOffline, "verified:", verified)
 }
-app.StartHeartbeat(0) // server cadence until Stop/Close
+if err := app.StartHeartbeat(0); err != nil {
+    fail(err)
+}
+if ok, reason := app.CheckOffline(); !ok {
+    fmt.Println("offline:", reason)
+}
 defer app.StopHeartbeat()
 ```
 
+## Compatibility checks
+
+From the Cerberus repository root on Linux, run `bash sdk/compatibility/run.sh go`. The suite uses a local API fixture to test activation, validation, signed errors, and offline heartbeat behavior.
+
+This SDK initialized successfully against the live FrostAuth API on November 18, 2026. A live activation and heartbeat require a disposable license.
+
 ## SDK layout
 
-* `frostauth/frostauth.go` — the whole SDK. Import `github.com/frostauth/sdk-go/frostauth`.
-* `example/main.go` — the interactive demo this README walks through.
+- `frostauth/frostauth.go` contains the SDK.
+- `example/main.go` runs the interactive example.
