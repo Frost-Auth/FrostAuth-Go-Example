@@ -10,10 +10,10 @@ If you can reproduce the issue with the example, open an issue with the SDK vers
 
 ## Security practices
 
-- Keep credentials, license keys, and session tokens out of logs.
-- Handle errors by code. The API can change the message text.
-- Keep authorization for server resources on the server.
-- Run your usual signing and integrity checks before shipping.
+- If you use VMProtect or Themida, put the protector's markers around the license checks.
+- Run integrity checks during the session. End the session if a check detects tampering.
+- Keep files you need to protect on the server. Clear temporary buffers when the app is done with them.
+- Use the API to recheck licenses and enforce access to server resources there. A local `isValid` flag alone can't enforce access.
 
 ## Copyright License
 
