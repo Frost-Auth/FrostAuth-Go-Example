@@ -223,7 +223,7 @@ app.Log("client started, integrity check passed")
 app.Ban("debugger detected") // reason shows on next login + dashboard
 ```
 
-## Server-sided webhooks
+## Server-side webhooks
 
 Pass the ID of a webhook configured by the product operator. The destination stays on the server.
 
@@ -233,22 +233,6 @@ if err != nil {
     fail(err)
 }
 fmt.Println("upstream:", res["status"], "ok:", res["ok"])
-```
-
-## Download file
-
-> File downloads are disabled in this SDK. Calls to `File()` return an error.
-
-## Changing username
-
-The API re-checks the signed-in user's password before renaming the account.
-
-```go
-res, err := app.ChangeUsername(newName, password)
-if err != nil {
-    fail(err)
-}
-fmt.Println("Renamed to", res["username"])
 ```
 
 ## Heartbeat & offline
