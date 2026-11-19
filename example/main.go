@@ -1,5 +1,3 @@
-// FrostAuth Go SDK — console example. Mirrors sdk/example.mjs output.
-// Fill owner/product from your dashboard, set version to the build you ship.
 package main
 
 import (
@@ -74,12 +72,6 @@ func main() {
 	dashboard(app)
 }
 
-// showUser prints a snapshot-backed profile readout. Everything here comes
-// from the local snapshot (populated by Activate/Register/Login on every
-// plan), so it works with or without a session token — unlike AppData/online,
-// which are session-backed and fail on plans without tokenSystem.
-// Only prints fields the backend actually returns (licenseView + accountView
-// + device + product) — no invented email/key/plan lookups.
 func showUser(snap frostauth.Snapshot) {
 	when := func(iso string) string {
 		if iso == "" {
@@ -184,12 +176,7 @@ func showUser(snap frostauth.Snapshot) {
 	fmt.Println("----------------------------------------------")
 }
 
-// dashboard prints the snapshot-backed profile readout (plus webhook test
-// and build-hash block). Session-backed reads (AppData/online) are
-// plan-gated (tokenSystem: Developer/Pro) and print "unknown" on other
-// plans, so they are not shown here at all.
 func dashboard(app *frostauth.FrostAuth) {
-	// Locale-style timestamp, e.g. 9/16/2026, 6:08:02 PM.
 	loc := func(iso string) string {
 		t, perr := time.Parse(time.RFC3339, iso)
 		if perr != nil || iso == "" {
